@@ -1,0 +1,20 @@
+#!/bin/bash
+
+docker run \
+  -v "$(pwd)"/ref:/srv/git:ro \
+  -v "$(pwd)"/cache:/cache \
+  -v "$(pwd)"/log:/workspace/log \
+  -v "$(pwd)"/src:/workspace/src \
+  --name quibble \
+  --rm \
+  docker-registry.wikimedia.org/releng/quibble-stretch-php73:latest \
+  --packages-source composer \
+  --db sqlite \
+  --skip all \
+  mediawiki/extensions/BetaFeatures \
+  mediawiki/extensions/Echo \
+  mediawiki/extensions/CentralAuth \
+  mediawiki/extensions/EventLogging \
+  mediawiki/extensions/EventStreamConfig \
+  -c "tail -f /dev/null"
+sudo mv src/LocalSettings.php . > /dev/null
