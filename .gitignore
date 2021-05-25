@@ -2,8 +2,8 @@ __pycache__
 /cache
 /log
 /ref
-/src
-/LocalSettings.php
+/mw
+/mw-needless
 /parameter_functions.py
 
 /.coverage

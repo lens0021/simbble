@@ -91,6 +91,11 @@ def get_arg_parser():
     return parser
 
 def resolve_dependencies():
+    deps = os.getenv('DEPENDENCIES')
+    if not deps:
+        return []
+    deps = deps.split(',')
+
     if not os.path.exists("parameter_functions.py"):
         print('Download parameter_functions.py...')
         os.system('curl -sLO https://raw.githubusercontent.com/wikimedia/integration-config/master/zuul/parameter_functions.py')
@@ -102,8 +107,9 @@ def resolve_dependencies():
         parameter_functions.dependencies['EventLogging'].remove('EventBus')
 
     # Add dependencies of target extension
-    parameter_functions.dependencies['ext'] = os.getenv('DEPENDENCIES','').split(',')
-    # parameter_functions.dependencies['ext'] = open('dependencies').read().splitlines()
+    print(f'The direct dependencies are {deps}')
+    parameter_functions.dependencies['ext'] = deps
+
 
     # Resolve
     resolvedDependencies = []
@@ -119,6 +125,7 @@ def resolve_dependencies():
 
 def purge_local_settings(path):
     if os.path.exists(path):
+        print(f'Purging {path}')
         os.remove(path)
 
 
@@ -133,6 +140,8 @@ def read_name(path_to_extension):
 
 
 def main():
+    os.system('sudo -v')
+
     logging.basicConfig(level=logging.INFO)
     logging.getLogger('simbble').setLevel(logging.DEBUG)
 
@@ -140,7 +149,7 @@ def main():
     args.run = ''.join(args.run)
     zuul_project = os.getenv('ZUUL_PROJECT', os.getenv('THING_SUBNAME'))
     if not zuul_project:
-        print('no ZUUL_PROJECT')
+        print('no ZUUL_PROJECT specified')
         exit(1)
 
     base_path = "/home/nemo/git/femiwiki" if zuul_project == 'DiscordNotifications' else "/home/nemo/git/wikimedia"
@@ -150,44 +159,55 @@ def main():
         mediawiki_version = 'master'
     print(f'Use {mediawiki_version} branch')
 
-    os.system('sudo -v')
+    purge_local_settings(f'mw/{mediawiki_version}/LocalSettings.php')
 
-    purge_local_settings(f'src/{mediawiki_version}/LocalSettings.php')
-
-    if not os.path.exists(f'src/{mediawiki_version}'):
+    if not os.path.exists(f'mw/{mediawiki_version}'):
         print(f'Trying to download MediaWiki {mediawiki_version}...')
-
         os.system(' '.join([
             'git clone',
             f'-b {mediawiki_version}',
             '--depth 1'
             '--recurse-submodules' if mediawiki_version != 'master' else '',
-            'https://gerrit.wikimedia.org/r/mediawiki/core src/{mediawiki_version}',
+            'https://gerrit.wikimedia.org/r/mediawiki/core mw/{mediawiki_version}',
         ]))
 
     type = 'extension' if os.path.exists(f'{base_path}/{zuul_project}/extension.json') else 'skin'
     name = read_name(f'{base_path}/{zuul_project}/{type}.json')
+    print(f'The type of the target {name} is {type}')
 
-    dist = f'src/{mediawiki_version}/{type}s/{name}'
+    dist = f'mw/{mediawiki_version}/{type}s/{name}'
     purge_directory(dist)
     os.system(f'sudo cp -r {base_path}/{zuul_project} {dist}')
 
     deps = resolve_dependencies()
+
+    if deps:
+        print( f'Dependencies are {", ".join(deps)}')
+
+    for ext in os.listdir(f'mw/{mediawiki_version}/extensions/'):
+        if ext != zuul_project and ext not in deps:
+            os.system(f'sudo mv mw/{mediawiki_version}/extensions/{ext} mw-needless/{mediawiki_version}/extensions/')
+
     for dep in deps:
         name = dep.split('/')[-1]
-        if not os.path.exists(f'src/{mediawiki_version}/extensions/{dep}'):
-            os.system(' '.join([
-                'sudo git clone',
-                f'-b {mediawiki_version}',
-                '--depth 1',
-                '--recurse-submodules',
-                f'https://gerrit.wikimedia.org/r/{dep}',
-                f'src/{mediawiki_version}/extensions/{dep}',
-            ]))
+        if not os.path.exists(f'mw/{mediawiki_version}/extensions/{dep}'):
+            if os.path.exists(f'mw-needless/{mediawiki_version}/extensions/{dep}'):
+                os.system(f'sudo mv mw-needless/{mediawiki_version}/extensions/{dep} mw/{mediawiki_version}/extensions/')
+            else:
+                cmd = ' '.join([
+                    'sudo git clone',
+                    f'-b {mediawiki_version}',
+                    '--depth 1',
+                    '--recurse-submodules',
+                    f'https://gerrit.wikimedia.org/r/{dep}',
+                    f'mw/{mediawiki_version}/extensions/{dep}',
+                ])
+                print(cmd)
+                os.system(cmd)
 
-    os.system(f'chmod 777 src/{mediawiki_version} cache')
-    os.system(f'sudo chown -R nobody:nogroup src/{mediawiki_version} cache')
-    os.system(f'sudo chown "$(id -u)":"$(id -g)" src/{mediawiki_version} cache')
+    os.system(f'chmod 777 mw/{mediawiki_version} cache')
+    os.system(f'sudo chown -R nobody:nogroup mw/{mediawiki_version} cache')
+    os.system(f'sudo chown "$(id -u)":"$(id -g)" mw/{mediawiki_version} cache')
 
     volumes = {}
 
@@ -202,7 +222,7 @@ def main():
     msg = 'run'
     image = ''
     if args.run != 'phan':
-        if os.path.exists(f'src/{mediawiki_version}/composer.lock'):
+        if os.path.exists(f'mw/{mediawiki_version}/composer.lock'):
             msg = msg + ' without pre-installed dependencies'
             pos_args.append('--skip-deps')
         else:
@@ -211,9 +231,11 @@ def main():
 
     if args.run == 'phan':
         msg = msg + ' Phan'
-        volumes[f'src/{mediawiki_version}']  = 'mediawiki'
+        volumes[f'mw/{mediawiki_version}']  = 'mediawiki'
         image = 'docker-registry.wikimedia.org/releng/mediawiki-phan-php73:latest'
-        opt_args.append(f'-e THING_SUBNAME={type}s/{zuul_project}')
+        opt_args = opt_args + [
+            f'-e THING_SUBNAME={type}s/{zuul_project}',
+        ]
         pos_args.append('--color')
     elif args.run == 'cover':
         image='docker-registry.wikimedia.org/releng/quibble-coverage:latest'
@@ -223,7 +245,7 @@ def main():
     else:
         msg = msg + ' Quibble'
         volumes['cache']  = 'cache'
-        volumes[f'src/{mediawiki_version}']  = 'workspace/src'
+        volumes[f'mw/{mediawiki_version}']  = 'workspace/src'
         image = 'docker-registry.wikimedia.org/releng/quibble-stretch-php72:latest'
         opt_args.append(f'-e ZUUL_PROJECT=mediawiki/{type}s/{zuul_project}')
         pos_args.append(f'--skip-zuul')
@@ -238,7 +260,7 @@ def main():
     print(f'Running `{cmd}`')
     os.system(cmd)
 
-    os.remove(f'src/{mediawiki_version}/{type}s/{name}')
+    os.system(f'sudo rm -rf /{mediawiki_version}/{type}s/{name}')
 
 
 if __name__ == '__main__':
