@@ -1,86 +1,4 @@
-#!/bin/bash
-set -euo pipefail; IFS=$'\n\t'
 
-if [ $EUID != 0 ]; then
-  sudo TOOL="${TOOL:-phpunit}" DEPENDENCIES="${DEPENDENCIES:-}" bash "$0" "$@";
-  exit "$?";
-fi
-
-if [ $# == 0 ]; then
-  cat <<EOF
-usage: <DEPENDENCIES=[extension]> <TOOL=[tool]> ./rc [extension]
-
-example:
-  ./rc DiscordNotifications
-  TOOL=phan ./rc DiscordNotifications
-  DEPENDENCIES=Flow TOOL=phan ./rc DiscordNotifications
-  DEPENDENCIES=Flow ./rc DiscordNotifications
-  DEPENDENCIES=Flow ./rc DiscordNotifications
-EOF
-exit 1
-fi
-
-EXT=$1
-test EXT || exit
-
-curl -sL https://raw.githubusercontent.com/wikimedia/integration-config/master/zuul/parameter_functions.py -o pf.py
-DEPENDENCIES=$(python3 rd.py)
-
-if [ "$1" == DiscordNotifications ]; then
-  BASE_PATH="/home/nemo/git"
-else
-  BASE_PATH="/home/nemo/git/femiwiki"
-fi
-MEDIAWIKI_VERSION="$(git --git-dir "${BASE_PATH}/${EXT}"/.git branch --show-current)"
-if [ "$MEDIAWIKI_VERSION" == 'main' ]; then
-  MEDIAWIKI_VERSION='master'
-fi
-echo "Use ${MEDIAWIKI_VERSION} branch"
-
-if [ -e src/"${MEDIAWIKI_VERSION}"/LocalSettings.php ]; then
-  rm src/"${MEDIAWIKI_VERSION}"/LocalSettings.php
-fi
-
-if [ ! -d  src/"${MEDIAWIKI_VERSION}" ]; then
-  echo 'Trying to download MW...'
-  if [ "${MEDIAWIKI_VERSION}" == 'master' ]; then
-    git clone --recurse-submodules -b "${MEDIAWIKI_VERSION}" --depth 1 \
-      https://gerrit.wikimedia.org/r/mediawiki/core src/"${MEDIAWIKI_VERSION}"
-  else
-    git clone -b "${MEDIAWIKI_VERSION}" --depth 1 \
-      https://gerrit.wikimedia.org/r/mediawiki/core src/"${MEDIAWIKI_VERSION}"
-  fi
-fi
-
-if [ -e "${BASE_PATH}/${EXT}"/extension.json ]; then
-  TYPE=extension
-else
-  TYPE=skin
-fi
-
-NAME=$(python -c 'import sys,json;print(json.loads(sys.stdin.read())["name"])' < "${BASE_PATH}/${EXT}"/extension.json)
-if [ -e "src/${MEDIAWIKI_VERSION}/${TYPE}s/${NAME}" ]; then
-  echo 'purging...'
-  rm -rf "src/${MEDIAWIKI_VERSION}/${TYPE}s/${NAME}" > /dev/null
-fi
-cp -r "${BASE_PATH}/${EXT}" "src/${MEDIAWIKI_VERSION}/${TYPE}s/${NAME}"
-
-if [ -e "src/${MEDIAWIKI_VERSION}/${TYPE}s/${NAME}/.github/workflows/.test-env" ]; then
-  # shellcheck disable=SC1090
-  source "src/${MEDIAWIKI_VERSION}/${TYPE}s/${NAME}/.github/workflows/.test-env"
-fi
-DEPENDENCIES=$(echo "${DEPENDENCIES:-}" | tr " " "\n")
-for dep in $(echo "$DEPENDENCIES" | tr " " "\n"); do
-  DEP_NAME=$(basename "${dep}")
-  if [ ! -d "src/${MEDIAWIKI_VERSION}/extensions/${DEP_NAME}" ]; then
-    git clone  --recurse-submodules -b "${MEDIAWIKI_VERSION}" --depth 1 \
-      https://gerrit.wikimedia.org/r/"${dep}" "src/${MEDIAWIKI_VERSION}/extensions/${DEP_NAME}"
-  fi
-done
-
-chmod 777 src/"${MEDIAWIKI_VERSION}" cache
-chown -R nobody:nogroup src/"${MEDIAWIKI_VERSION}" cache
-chown "$(id -u)":"$(id -g)" src/"${MEDIAWIKI_VERSION}" cache
 if [ "${2:-}" == 'deps' ]; then
   echo 'deps'
   docker run \
@@ -95,34 +13,19 @@ if [ "${2:-}" == 'deps' ]; then
     --skip all \
     $DEPENDENCIES
 elif [ "${TOOL}" == 'phpunit' ]; then
-  echo 'run quibble...'
-  if [ -e src/"${MEDIAWIKI_VERSION}"/composer.lock ]; then
-    echo '...without deps'
-    docker run \
-      -e ZUUL_PROJECT=mediawiki/"${TYPE}s/${NAME}" \
-      -v "$(pwd)"/cache:/cache \
-      -v "$(pwd)"/src/"${MEDIAWIKI_VERSION}":/workspace/src \
-      --rm \
-      docker-registry.wikimedia.org/releng/quibble-stretch-php73:latest \
-      --skip-zuul \
-      --skip-deps \
-      -c "php tests/phpunit/phpunit.php --group ${EXT}" \
-      $DEPENDENCIES
-      # --db sqlite \
-      # --run "phpunit" \
-  else
-    echo '...with deps'
-    docker run \
-      -e ZUUL_PROJECT=mediawiki/"${TYPE}s/${NAME}" \
-      -v "$(pwd)"/cache:/cache \
-      -v "$(pwd)"/src/"${MEDIAWIKI_VERSION}":/workspace/src \
-      --rm \
-      docker-registry.wikimedia.org/releng/quibble-stretch-php73:latest \
-      --skip-zuul \
-      --packages-source composer \
-      -c "php tests/phpunit/phpunit.php --group ${EXT}" \
-      $DEPENDENCIES
-  fi
+  echo 'run quibble without deps'
+  docker run \
+    -e ZUUL_PROJECT=mediawiki/"${TYPE}s/${NAME}" \
+    -v "$(pwd)"/cache:/cache \
+    -v "$(pwd)"/src/"${MEDIAWIKI_VERSION}":/workspace/src \
+    --rm \
+    docker-registry.wikimedia.org/releng/quibble-stretch-php73:latest \
+    --skip-zuul \
+    --skip-deps \
+    -c "php tests/phpunit/phpunit.php --group Flow" \
+    $DEPENDENCIES
+    # --run "phpunit" \
+    # --db sqlite \
 elif [ "${TOOL}" == 'phan' ]; then
   echo 'run phan...'
   docker run \
