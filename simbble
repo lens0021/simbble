@@ -20,7 +20,9 @@ known_stages = [
     'qunit',
     'selenium',
     'api-testing',
+    # Non exist in Quibble
     'phan',
+    'phpunit-custom',
 ]
 default_stages = [
     'phpunit-unit',
@@ -57,10 +59,10 @@ def get_arg_parser():
         description='Simbble: A simple script to run Quibble the Mediawiki test runner',
         epilog='\n  '.join([
             'examples:',
-            f'{prog} DiscordNotifications',
-            f'{prog} DiscordNotifications --run phan',
-            f'DEPENDENCIES=Flow {prog} DiscordNotifications --run phan',
-            f'DEPENDENCIES=Flow {prog} DiscordNotifications',
+            f'ZUUL_PROJECT=DiscordNotifications {prog}',
+            f'ZUUL_PROJECT=DiscordNotifications {prog} --run phan',
+            f'DEPENDENCIES=Flow ZUUL_PROJECT=DiscordNotifications {prog} --run phan',
+            f'DEPENDENCIES=Flow ZUUL_PROJECT=DiscordNotifications {prog}',
         ]),
         formatter_class=argparse.RawTextHelpFormatter,
         prog=prog
@@ -123,16 +125,18 @@ def resolve_dependencies():
     return resolvedDependencies
 
 
-def purge_local_settings(path):
+def purge_installation_file(path):
     if os.path.exists(path):
         print(f'Purging {path}')
-        os.remove(path)
+        os.system(f'sudo rm -rf {path}')
 
 
 def purge_directory(path):
     if os.path.exists(path):
         print(f'Purging {path}')
         os.system(f'sudo rm -rf {path}')
+    else:
+        print(f'is empty: {path}')
 
 def read_name(path_to_extension):
     data = open(path_to_extension, 'r').read()
@@ -152,47 +156,62 @@ def main():
         print('no ZUUL_PROJECT specified')
         exit(1)
 
-    base_path = "/home/nemo/git/femiwiki" if zuul_project == 'DiscordNotifications' else "/home/nemo/git/wikimedia"
+    femiwiki_extensions = [
+        'AchievementBadges',
+        'DiscordNotifications',
+        'FacetedCategory',
+        'Femiwiki',
+        'Sanctions',
+        'UnifiedExtensionForFemiwiki',
+    ]
+
+    base_path = "/home/nemo/git/femiwiki" if zuul_project in femiwiki_extensions else "/home/nemo/git/wikimedia"
 
     mediawiki_version = os.popen(f'git --git-dir "{base_path}/{zuul_project}"/.git branch --show-current').read().strip()
-    if mediawiki_version == 'main' or not re.compile('^REL\d+_\d+$').match(mediawiki_version):
+    match = re.compile('^(REL\d+_\d+)(?:-.+)?$').match(mediawiki_version)
+    if mediawiki_version == 'main':
+        mediawiki_version = 'master'
+    elif match:
+        mediawiki_version = match.group(1)
+    else:
         mediawiki_version = 'master'
     print(f'Use {mediawiki_version} branch')
 
-    purge_local_settings(f'mw/{mediawiki_version}/LocalSettings.php')
+    purge_installation_file(f'mw/{mediawiki_version}/LocalSettings.php')
+    purge_installation_file(f'mw/{mediawiki_version}/composer.local.json')
 
     if not os.path.exists(f'mw/{mediawiki_version}'):
         print(f'Trying to download MediaWiki {mediawiki_version}...')
         os.system(' '.join([
             'git clone',
             f'-b {mediawiki_version}',
-            '--depth 1'
+            '--depth 1',
             '--recurse-submodules' if mediawiki_version != 'master' else '',
-            'https://gerrit.wikimedia.org/r/mediawiki/core mw/{mediawiki_version}',
+            f'https://gerrit.wikimedia.org/r/mediawiki/core mw/{mediawiki_version}',
         ]))
 
     type = 'extension' if os.path.exists(f'{base_path}/{zuul_project}/extension.json') else 'skin'
     name = read_name(f'{base_path}/{zuul_project}/{type}.json')
     print(f'The type of the target {name} is {type}')
 
-    dist = f'mw/{mediawiki_version}/{type}s/{name}'
-    purge_directory(dist)
-    os.system(f'sudo cp -r {base_path}/{zuul_project} {dist}')
+    purge_directory(f'mw/{mediawiki_version}/{type}s/{name}')
+    cmd = f'sudo cp -R {base_path}/{zuul_project} mw/{mediawiki_version}/{type}s'
+    print(f'Running {cmd}')
+    os.system(cmd)
 
     deps = resolve_dependencies()
 
-    if deps:
-        print( f'Dependencies are {", ".join(deps)}')
-
     for ext in os.listdir(f'mw/{mediawiki_version}/extensions/'):
+        os.system(f'mkdir -p mw-needless/{mediawiki_version}/extensions')
         if ext != zuul_project and ext not in deps:
+            os.system(f'sudo rm -rf mw-needless/{mediawiki_version}/extensions/{ext}')
             os.system(f'sudo mv mw/{mediawiki_version}/extensions/{ext} mw-needless/{mediawiki_version}/extensions/')
 
     for dep in deps:
         name = dep.split('/')[-1]
-        if not os.path.exists(f'mw/{mediawiki_version}/extensions/{dep}'):
-            if os.path.exists(f'mw-needless/{mediawiki_version}/extensions/{dep}'):
-                os.system(f'sudo mv mw-needless/{mediawiki_version}/extensions/{dep} mw/{mediawiki_version}/extensions/')
+        if not os.path.exists(f'mw/{mediawiki_version}/extensions/{name}'):
+            if os.path.exists(f'mw-needless/{mediawiki_version}/extensions/{name}'):
+                os.system(f'sudo mv mw-needless/{mediawiki_version}/extensions/{name} mw/{mediawiki_version}/extensions/')
             else:
                 cmd = ' '.join([
                     'sudo git clone',
@@ -200,7 +219,7 @@ def main():
                     '--depth 1',
                     '--recurse-submodules',
                     f'https://gerrit.wikimedia.org/r/{dep}',
-                    f'mw/{mediawiki_version}/extensions/{dep}',
+                    f'mw/{mediawiki_version}/extensions/{name}',
                 ])
                 print(cmd)
                 os.system(cmd)
@@ -246,9 +265,25 @@ def main():
         msg = msg + ' Quibble'
         volumes['cache']  = 'cache'
         volumes[f'mw/{mediawiki_version}']  = 'workspace/src'
-        image = 'docker-registry.wikimedia.org/releng/quibble-stretch-php72:latest'
+        image = 'docker-registry.wikimedia.org/releng/quibble-stretch-php73:latest'
         opt_args.append(f'-e ZUUL_PROJECT=mediawiki/{type}s/{zuul_project}')
+        pos_args.append(" ".join(deps))
         pos_args.append(f'--skip-zuul')
+        if args.run == 'phpunit-custom':
+            # pos_args.append('-c "' + ' '.join([
+            #     "php tests/phpunit/phpunit.php",
+            #     "--testsuite extensions",
+            #     "--exclude-group Broken,ParserFuzz,Stub,Database,Standalone",
+            #     "--log-junit /workspace/log/junit-dbless.xml",
+            # ]) + '"')
+            pos_args.append('-c "' + ' '.join([
+                "php tests/phpunit/phpunit.php",
+                "--testsuite extensions",
+                "--group AbuseFilterConsequences",
+                "--stop-on-failure",
+            ]) + '"')
+        else:
+            pos_args.append(f'--run {args.run}')
 
     print(msg)
     cmd = ' '.join([
