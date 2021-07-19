@@ -207,11 +207,12 @@ def main():
             os.system(f'sudo rm -rf mw-needless/{mediawiki_version}/extensions/{ext}')
             os.system(f'sudo mv mw/{mediawiki_version}/extensions/{ext} mw-needless/{mediawiki_version}/extensions/')
 
+    deps.append('mediawiki/skins/Vector')
     for dep in deps:
-        name = dep.split('/')[-1]
-        if not os.path.exists(f'mw/{mediawiki_version}/extensions/{name}'):
-            if os.path.exists(f'mw-needless/{mediawiki_version}/extensions/{name}'):
-                os.system(f'sudo mv mw-needless/{mediawiki_version}/extensions/{name} mw/{mediawiki_version}/extensions/')
+        _, type, name = dep.split('/')
+        if not os.path.exists(f'mw/{mediawiki_version}/{type}/{name}'):
+            if os.path.exists(f'mw-needless/{mediawiki_version}/{type}/{name}'):
+                os.system(f'sudo mv mw-needless/{mediawiki_version}/{type}/{name} mw/{mediawiki_version}/{type}/')
             else:
                 cmd = ' '.join([
                     'sudo git clone',
@@ -219,7 +220,7 @@ def main():
                     '--depth 1',
                     '--recurse-submodules',
                     f'https://gerrit.wikimedia.org/r/{dep}',
-                    f'mw/{mediawiki_version}/extensions/{name}',
+                    f'mw/{mediawiki_version}/{type}/{name}',
                 ])
                 print(cmd)
                 os.system(cmd)
