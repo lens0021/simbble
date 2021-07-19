@@ -265,6 +265,7 @@ def main():
     else:
         msg = msg + ' Quibble'
         volumes['cache']  = 'cache'
+        volumes['log']  = 'workspace/log'
         volumes[f'mw/{mediawiki_version}']  = 'workspace/src'
         image = 'docker-registry.wikimedia.org/releng/quibble-stretch-php73:latest'
         opt_args.append(f'-e ZUUL_PROJECT=mediawiki/{type}s/{zuul_project}')
