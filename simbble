@@ -172,8 +172,10 @@ def main():
     femiwiki_extensions = [
         'AchievementBadges',
         'DiscordNotifications',
+        'DiscordRCFeed',
         'FacetedCategory',
         'Femiwiki',
+        'PageViewInfoGA',
         'Sanctions',
         'UnifiedExtensionForFemiwiki',
     ]
