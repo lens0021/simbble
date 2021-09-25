@@ -90,6 +90,19 @@ def get_arg_parser():
         help='Tests to run. Comma separated. (default: phan).',
     )
 
+    parser.add_argument(
+        '-c',
+        '--command',
+        action='append',
+        dest='commands',
+        metavar='COMMAND',
+        help=(
+            'Run given command instead of built-in stages. '
+            'Each command is executed relatively to '
+            'MediaWiki installation path.'
+        ),
+    )
+
     return parser
 
 def resolve_dependencies():
@@ -260,17 +273,19 @@ def main():
     elif args.run == 'cover':
         image='docker-registry.wikimedia.org/releng/quibble-coverage:latest'
         opt_args.append(f'-e ZUUL_PROJECT=mediawiki/{type}s/{zuul_project}')
-        pos_args.append(f'--skip-zuul')
-        pos_args.append(f'-c mwext-phpunit-coverage')
+        pos_args.append('--skip-zuul')
+        pos_args.append('-c mwext-phpunit-coverage')
     else:
         msg = msg + ' Quibble'
         volumes['cache']  = 'cache'
         volumes['log']  = 'workspace/log'
         volumes[f'mw/{mediawiki_version}']  = 'workspace/src'
-        image = 'docker-registry.wikimedia.org/releng/quibble-stretch-php73:latest'
+        image = 'docker-registry.wikimedia.org/releng/quibble-buster-php73:latest'
         opt_args.append(f'-e ZUUL_PROJECT=mediawiki/{type}s/{zuul_project}')
         pos_args.append(" ".join(deps))
-        pos_args.append(f'--skip-zuul')
+        pos_args.append('--skip-zuul')
+        if 'commands' in args:
+            pos_args.append(f'--command "{args.commands[0]}"')
         if args.run == 'phpunit-custom':
             # pos_args.append('-c "' + ' '.join([
             #     "php tests/phpunit/phpunit.php",
